@@ -37,6 +37,12 @@ ReasonCode = Literal[
     "third_party_contact_blocked",
     "financial_commitment_blocked",
     "high_value_escalation",
+    "transaction_match",
+    "counterparty_unverified",
+    "suspicious_pattern",
+    "duplicate_charge_detected",
+    "settlement_window_exceeded",
+    "agent_cash_not_reflected",
 ]
 
 CaseType = Literal[
@@ -53,7 +59,6 @@ CaseType = Literal[
 Department = Literal[
     "dispute_resolution",
     "payments_ops",
-    "customer_resolution",
     "customer_support",
     "merchant_operations",
     "agent_operations",
