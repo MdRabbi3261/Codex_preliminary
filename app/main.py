@@ -203,10 +203,7 @@ async def analyze_ticket(request: AnalyzeRequest) -> AnalyzeResponse:
         language=language,
     )
 
-    if not decision.needs_llm and not decision.needs_llm_enrichment:
-        return base_response
-
-    if state.llm is None:
+    if state.llm is None or not state.llm.api_key:
         logger.info("LLM unavailable for ticket %s, returning deterministic", request.ticket_id)
         return base_response
 
@@ -222,6 +219,8 @@ async def analyze_ticket(request: AnalyzeRequest) -> AnalyzeResponse:
     )
 
     if not result.ok or not result.data:
+        logger.warning("LLM lane failed for %s: ok=%s error=%s latency_ms=%s",
+                       request.ticket_id, result.ok, getattr(result, "error", "?"), getattr(result, "latency_ms", "?"))
         return base_response
 
     data = result.data
