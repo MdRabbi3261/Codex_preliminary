@@ -69,7 +69,7 @@ The agent must route cases using the exact logical bindings listed in the table 
 | :--- | :--- | :--- | :--- |
 | `wrong_transfer` | `dispute_resolution` | `high` (if transaction match is found) | `true` |
 | `payment_failed` | `payments_ops` | `high` | `false` (or `true` if ledger mismatch occurs) |
-| `refund_request` | `customer_resolution` | `low` (promoted to `high` if contested, see §3.1) | `false` (promoted to `true` if contested, see §3.1) |
+| `refund_request` | `customer_support` | `low` (promoted to `high` if contested, see §3.1) | `false` (promoted to `true` if contested, see §3.1) |
 | `duplicate_payment` | `payments_ops` | `high` | `true` |
 | `merchant_settlement_delay`| `merchant_operations` | `medium` | `false` |
 | `agent_cash_in_issue` | `agent_operations` | `high` | `true` |
@@ -111,7 +111,7 @@ The `customer_reply` string MUST satisfy all three rules simultaneously. Violati
 
 ### 4.4 `reason_codes` Closed Enum
 
-`reason_codes` MUST be a subset of the following closed list. Any code outside this list triggers a schema validation failure:
+`reason_codes` MUST be a subset of the following closed list. Any code outside this list triggers a schema validation failure. The list is derived from the problem-statement PDF Section 7.1 example (`transaction_match`) plus the routing and safety rules in Sections 3 and 4 of this document:
 
 ```
 wrong_transfer, payment_failed, refund_request, duplicate_payment,
@@ -119,7 +119,10 @@ merchant_settlement_delay, agent_cash_in_issue, phishing_attempt,
 social_engineering, no_match, ambiguous_evidence, amount_mismatch,
 status_mismatch, counterparty_mismatch, prompt_injection_detected,
 credential_request_blocked, third_party_contact_blocked,
-financial_commitment_blocked, high_value_escalation
+financial_commitment_blocked, high_value_escalation,
+transaction_match, counterparty_unverified, suspicious_pattern,
+duplicate_charge_detected, settlement_window_exceeded,
+agent_cash_not_reflected
 ```
 
 ---
@@ -150,3 +153,7 @@ financial_commitment_blocked, high_value_escalation
 - **Process model:** Single uvicorn worker is sufficient for the harness load profile. No auth on `/health` or `/analyze-ticket`.
 - **Python runtime:** 3.11 (per `Dockerfile`).
 - **Mandatory dependencies (from `requirements.txt`):** `fastapi`, `uvicorn`, `pydantic`. The remaining entries (`httpx`, `pytest`, `python-dotenv`, `google-genai`, `requests`) are optional tooling.
+- **Resource envelope (per PDF §9):** Target 2 vCPU / 4 GB RAM. No GPU. Image size preference is < 5 GB; pull large model assets at runtime rather than baking them in.
+- **Allowed external services (per PDF §9.1):** Google AI (`google-genai`), OpenAI, Anthropic, Hugging Face Inference, Cohere, or any comparable major LLM provider. Outbound calls to personal infrastructure or unrelated endpoints may be blocked.
+- **Secret handling (per PDF §9.2):** API keys are read from environment variables only. Never committed to the repo. Responses, logs, and error bodies must not leak secrets, tokens, or stack traces.
+- **Latency contract (per PDF §9):** `POST /analyze-ticket` MUST respond within 30 seconds. `GET /health` MUST return `{"status":"ok"}` within 60 seconds of service start.
