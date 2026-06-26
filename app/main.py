@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 # without requiring the user to export it manually.
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"), override=False)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -68,12 +69,31 @@ app = FastAPI(
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Per CHALLENGE_SPECIFICATION §5.2:
+    - 400: missing required fields (ticket_id, complaint) or JSON parse failure
+    - 422: body parses, but complaint is empty / whitespace-only
+    """
+    errors = exc.errors()
+    # Empty/whitespace complaint arrives as 'string_too_short' or 'value_error'.
+    has_empty_complaint = any(
+        e.get("loc", [None, None])[-1] == "complaint"
+        and e.get("type") in ("string_too_short", "value_error")
+        for e in errors
+    )
+    if has_empty_complaint:
+        return JSONResponse(status_code=422, content={"detail": errors})
     return JSONResponse(
         status_code=400,
-        content={
-            "error": "invalid_request",
-            "detail": exc.errors(),
-        },
+        content={"error": "invalid_request", "detail": errors},
+    )
+
+
+@app.exception_handler(json.JSONDecodeError)
+async def json_decode_exception_handler(request: Request, exc: json.JSONDecodeError):
+    """§5.2: JSON parse failure -> 400 Bad Request."""
+    return JSONResponse(
+        status_code=400,
+        content={"error": "invalid_request", "detail": "malformed JSON body"},
     )
 
 
@@ -214,7 +234,7 @@ async def analyze_ticket(request: AnalyzeRequest) -> AnalyzeResponse:
     customer_reply = safety.cleaned_text if safety.safe else base_response.customer_reply
     extra_reasons: List[str] = list(safety.triggered_rules or [])
     if safety.injection_detected:
-        extra_reasons.append("injection_detected")
+        extra_reasons.append("prompt_injection_detected")
 
     return AnalyzeResponse(
         ticket_id=request.ticket_id,

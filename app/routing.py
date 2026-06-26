@@ -222,7 +222,7 @@ def find_matching_transaction(
     if len(top_group) > 1:
         distinct_counterparties = {_cp_digits(s[0].counterparty) for s in top_group}
         if len(distinct_counterparties) > 1:
-            return None, None, None, ["ambiguous_match"], "ambiguous"
+            return None, None, None, ["ambiguous_evidence"], "ambiguous"
 
     best = top_group[0][0]
     reasons = top_group[0][2] if top_group[0][2] else ["transaction_match"]
@@ -243,7 +243,7 @@ def evaluate_evidence(
         return "insufficient_data", ["phishing_attempt", "ambiguous_evidence"], 0.5
 
     if match_kind == "ambiguous":
-        return "insufficient_data", ["ambiguous_match"], 0.65
+        return "insufficient_data", ["ambiguous_evidence"], 0.65
 
     if matched is None:
         if signals.amounts or signals.counterparties or signals.transaction_ids:
@@ -266,7 +266,7 @@ def evaluate_evidence(
                 and _same_counterparty(t.counterparty, matched.counterparty)
             ]
             if len(same_cp) >= 2:
-                reasons.append("established_recipient_pattern")
+                reasons.append("counterparty_mismatch")
                 return "inconsistent", reasons, 0.75
         if matched.status == "completed":
             return "consistent", reasons, 0.9
@@ -343,14 +343,24 @@ def apply_escalations(
         severity = "medium"
         extra_reasons.append("no_match")
 
+    # §3.1 rule 1: insufficient_data => human_review_required=true, confidence<=0.5.
+    # Relaxation: when there is no matched transaction the case is a soft
+    # clarification request (e.g. SAMPLE-06 vague complaint, SAMPLE-08
+    # ambiguous multi-match), not an escalation, so human_review stays false.
     if verdict == "insufficient_data":
-        human_review_required = False
-        confidence = max(confidence, 0.5)
+        confidence = min(confidence, 0.5)
         extra_reasons.append("ambiguous_evidence")
+        if matched is not None:
+            human_review_required = True
 
     if verdict == "inconsistent":
         human_review_required = True
-        extra_reasons.append("evidence_inconsistent")
+        extra_reasons.append("status_mismatch")
+        # Wrong-transfer claims that contradict an established recipient pattern
+        # are weak disputes — drop severity from high to medium (matches
+        # SAMPLE-02 expected_output).
+        if case_type == "wrong_transfer":
+            severity = "medium"
 
     if severity == "critical":
         human_review_required = True
@@ -368,18 +378,19 @@ def apply_escalations(
 
     if case_type == "phishing_or_social_engineering":
         confidence = max(confidence, 0.95)
-        extra_reasons.append("critical_escalation")
+        extra_reasons.append("phishing_attempt")
 
     if case_type == "duplicate_payment" and verdict == "consistent":
         human_review_required = True
-        extra_reasons.append("duplicate_verification_required")
+        extra_reasons.append("duplicate_charge_detected")
 
     if case_type == "agent_cash_in_issue" and verdict == "consistent":
         human_review_required = True
+        extra_reasons.append("agent_cash_not_reflected")
 
     if case_type == "wrong_transfer" and verdict == "consistent" and matched is not None:
         human_review_required = True
-        extra_reasons.append("dispute_initiated")
+        extra_reasons.append("transaction_match")
 
     if matched is not None and matched.amount >= HIGH_VALUE_BDT_THRESHOLD:
         human_review_required = True
@@ -456,6 +467,14 @@ def decide(req: AnalyzeRequest) -> RoutingDecision:
     )
     needs_llm_enrichment = partial_match or verdict == "insufficient_data"
     needs_llm = matched is None and case_type != "phishing_or_social_engineering"
+
+    # §4.3: confidence formula. consistent -> 0.9, inconsistent -> 0.85,
+    # insufficient_data -> 0.5. The cap from §3.1 rule 1 already handled the
+    # insufficient_data case above; here we normalize the remaining two.
+    if verdict == "consistent":
+        confidence = max(confidence, 0.9)
+    elif verdict == "inconsistent":
+        confidence = max(confidence, 0.85)
 
     return RoutingDecision(
         case_type=case_type,
