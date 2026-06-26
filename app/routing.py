@@ -229,9 +229,6 @@ def evaluate_evidence(
         return "insufficient_data", reasons
 
     if case_type == "duplicate_payment":
-        same_amount_dupes = sum(
-            1 for t in matched.__class__.mro().__class__ and []  # noqa
-        )
         return "insufficient_data", ["duplicate_charge_detected"]
 
     if case_type == "refund_request":
