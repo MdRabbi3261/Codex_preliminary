@@ -59,7 +59,11 @@ class LLMClient:
                 f"Model {model!r} is not in the allowed flash-class set. "
                 f"Allowed: {sorted(_ALLOWED_MODELS)}"
             )
-        self.api_key = api_key or os.environ.get("your-google-ai-studio-key-here") or os.environ.get("GEMINI_API_KEY")
+        raw_key = api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        # Reject the literal placeholder so we never accidentally call Gemini with it.
+        if raw_key and raw_key.strip().startswith("your-google-ai-studio-key"):
+            raw_key = None
+        self.api_key = raw_key
         self.model = model
         self.timeout_seconds = float(timeout_seconds)
         self.max_concurrency = max(1, int(max_concurrency))

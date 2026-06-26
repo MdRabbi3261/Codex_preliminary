@@ -6,6 +6,12 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any, List, Optional
 
+from dotenv import load_dotenv
+
+# Load .env from the repo root if present, so uvicorn picks up GOOGLE_API_KEY
+# without requiring the user to export it manually.
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"), override=False)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
