@@ -48,9 +48,14 @@ state = AppState()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        state.llm = new_client_from_env()
-        await state.llm.prewarm()
-        logger.info("LLM client prewarmed: model=%s", state.llm.model)
+        client = new_client_from_env()
+        if not client.api_key:
+            logger.warning("LLM disabled: GOOGLE_API_KEY missing or placeholder")
+            state.llm = None
+        else:
+            await client.prewarm()
+            state.llm = client
+            logger.info("LLM client prewarmed: model=%s", state.llm.model)
     except Exception as exc:
         logger.warning("LLM prewarm failed, continuing without: %s", exc)
         state.llm = None

@@ -269,8 +269,13 @@ def summarize_transactions(history: List[Any]) -> str:
 
 
 def new_client_from_env() -> LLMClient:
+    raw_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or ""
+    # Reject the template placeholder so a misconfigured .env fails loud
+    # instead of silently falling back to deterministic responses.
+    if not raw_key or raw_key.strip() in {"your-google-ai-studio-key-here", ""}:
+        raw_key = ""
     return LLMClient(
-        api_key=os.environ.get("your-google-ai-studio-key-here") or os.environ.get("GEMINI_API_KEY"),
+        api_key=raw_key,
         model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
         timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)),
         max_concurrency=int(os.environ.get("LLM_MAX_CONCURRENCY", DEFAULT_MAX_CONCURRENCY)),
