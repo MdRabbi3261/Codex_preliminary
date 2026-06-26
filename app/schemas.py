@@ -43,6 +43,9 @@ ReasonCode = Literal[
     "duplicate_charge_detected",
     "settlement_window_exceeded",
     "agent_cash_not_reflected",
+    "dispute_initiated",
+    "critical_escalation",
+    "duplicate_verification_required",
 ]
 
 CaseType = Literal[
