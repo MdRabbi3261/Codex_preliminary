@@ -37,7 +37,7 @@ Each object inside the `transaction_history` array contains:
 - `transaction_id` (String, Required)
 - `timestamp` (String ISO 8601, Required)
 - `type` (String Enum, Required): `transfer`, `payment`, `cash_in`, `cash_out`, `settlement`, `refund`
-- `status` (String Enum, Required): `completed`, `6failed`, `pending`, `reversed`
+- `status` (String Enum, Required): `completed`, `failed`, `pending`, `reversed`
 - `amount` (Number, Required): Total monetary volume in BDT.
 - `counterparty` (String, Required): Target phone number, merchant ID, or agent ID node.
 
@@ -69,9 +69,84 @@ The agent must route cases using the exact logical bindings listed in the table 
 | :--- | :--- | :--- | :--- |
 | `wrong_transfer` | `dispute_resolution` | `high` (if transaction match is found) | `true` |
 | `payment_failed` | `payments_ops` | `high` | `false` (or `true` if ledger mismatch occurs) |
-| `refund_request` | `customer_resolution` / `customer_support` | `low` (standard) / `high` (if contested) | Dependent on dispute tracking state |
+| `refund_request` | `customer_resolution` | `low` (promoted to `high` if contested, see §3.1) | `false` (promoted to `true` if contested, see §3.1) |
 | `duplicate_payment` | `payments_ops` | `high` | `true` |
 | `merchant_settlement_delay`| `merchant_operations` | `medium` | `false` |
 | `agent_cash_in_issue` | `agent_operations` | `high` | `true` |
 | `phishing_or_social_engineering`| `fraud_risk` | `critical` | `true` |
 | `other` | `customer_support` | `low` | `false` |
+
+### 3.1 Routing Footnotes & Escalation Rules
+
+The conditional severity / escalation cells above are resolved by the following deterministic rules, evaluated in order:
+
+1. **`insufficient_data` evidence ⇒ escalation.** When `evidence_verdict == "insufficient_data"`, force `human_review_required = true` and cap `confidence ≤ 0.5`, regardless of `case_type`.
+2. **`critical` severity ⇒ escalation.** When `severity == "critical"` (i.e. `phishing_or_social_engineering` matched), `human_review_required = true` is already implied by §3; do not override.
+3. **`wrong_transfer` no-match branch.** When no `transaction_history` entry can be matched against the complaint text, downgrade `severity` to `medium`, set `relevant_transaction_id = null`, and keep `human_review_required = true` (ambiguous evidence rule applies).
+4. **`refund_request` contested promotion.** A `refund_request` is "contested" when the `transaction_history` contains a matching entry with `status ∈ {"completed", "reversed"}` AND the complaint explicitly disputes that resolution (keywords: `already refunded`, `not received`, `didn't get`, `still waiting`, `double charged`). Contested ⇒ `severity = "high"` and `human_review_required = true`. Otherwise the defaults from the §3 row apply.
+5. **`payment_failed` ledger mismatch promotion.** Promote `human_review_required` to `true` when `payment_failed` is detected AND `evidence_verdict == "inconsistent"` (e.g. customer claims failure but history shows `completed`).
+6. **`high-value` heuristic.** Any matched `transaction_history` entry with `amount ≥ 50000` BDT forces `human_review_required = true` regardless of `case_type` (overrides any `false` from the matrix).
+
+---
+
+## 4. RESPONSE QUALITY & SAFETY CONTRACTS
+
+### 4.1 `customer_reply` Safety Guardrails
+
+The `customer_reply` string MUST satisfy all three rules simultaneously. Violations are tracked in `reason_codes` for traceability:
+
+- **Credential filter:** Must never request a PIN, OTP, password, access token, full card number, or CVV.
+- **Financial commitment filter:** Must never use definitive completion phrasing such as `"We have reversed"`, `"Your money has been refunded"`, `"We will unlock your profile"`. Mandated compliant phrasing: `"Any eligible amount will be returned through official channels after review"`, `"The operational division will cross-reference this ledger sequence"`.
+- **Third-party contact filter:** Must never direct the user to contact the agent, a phone number, an email address, a social media handle, or any channel outside the official in-app support surface.
+
+### 4.2 Language Mirroring
+
+- If the resolved language is `bn` (Bangla), the `customer_reply` MUST be written entirely in native Bangla script.
+- If `en` or `mixed`, the `customer_reply` MUST be written in plain English.
+- All triage metadata (`agent_summary`, `recommended_next_action`, `reason_codes`) MUST always be English, regardless of input language.
+
+### 4.3 `confidence` Heuristic (Optional Field)
+
+`confidence` is always emitted (not omitted) and is derived as: `consistent → 0.9`, `inconsistent → 0.85`, `insufficient_data → 0.5`. Override downward by `0.2` whenever prompt-injection patterns are detected in the complaint text.
+
+### 4.4 `reason_codes` Closed Enum
+
+`reason_codes` MUST be a subset of the following closed list. Any code outside this list triggers a schema validation failure:
+
+```
+wrong_transfer, payment_failed, refund_request, duplicate_payment,
+merchant_settlement_delay, agent_cash_in_issue, phishing_attempt,
+social_engineering, no_match, ambiguous_evidence, amount_mismatch,
+status_mismatch, counterparty_mismatch, prompt_injection_detected,
+credential_request_blocked, third_party_contact_blocked,
+financial_commitment_blocked, high_value_escalation
+```
+
+---
+
+## 5. ENDPOINT CONTRACTS
+
+### 5.1 `GET /health`
+
+- **Latency contract:** Must return a 200 OK within 60 seconds of container start.
+- **Body (literal):** `{"status": "ok"}`
+- **Behavior:** Pure liveness probe; no dependency checks. Always returns 200 unless the process is unrecoverable.
+
+### 5.2 `POST /analyze-ticket`
+
+- **Request body:** Section 2.1.
+- **Response body:** Section 2.2.
+- **Latency tiers:** ≤ 5s full credit, 5–15s partial credit, > 30s hard failure.
+- **Error status matrix:**
+  - `400 Bad Request` — JSON parse failure or missing required fields (`ticket_id`, `complaint`).
+  - `422 Unprocessable Entity` — Body parses, but `complaint` is empty or whitespace-only.
+  - `500 Internal Server Error` — Internal failure; body MUST NOT include stack traces, internal property names, or active credentials.
+
+---
+
+## 6. DEPLOYMENT CONTRACT
+
+- **Container port:** 8000 (overridable via `PORT` env var per the bundled `Dockerfile`).
+- **Process model:** Single uvicorn worker is sufficient for the harness load profile. No auth on `/health` or `/analyze-ticket`.
+- **Python runtime:** 3.11 (per `Dockerfile`).
+- **Mandatory dependencies (from `requirements.txt`):** `fastapi`, `uvicorn`, `pydantic`. The remaining entries (`httpx`, `pytest`, `python-dotenv`, `google-genai`, `requests`) are optional tooling.
